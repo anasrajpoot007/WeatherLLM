@@ -1,227 +1,324 @@
-import sqlite3
-import json
-import glob
-import requests
+"""
+Step 3 - ETL: parse, normalise and load
+---------------------------------------
+Reads the NEWEST non-empty raw capture of each kind and loads it into
+weather.db with foreign keys enforced.
 
-conn = sqlite3.connect("sports.db")
+Two write strategies, chosen per table for a reason:
+
+  UPSERT (INSERT ... ON CONFLICT DO UPDATE) for reference tables -
+  states, offices, locations, stations. A station can be renamed or a
+  city reassigned to a different grid cell; we want the current truth.
+
+  APPEND-IF-NEW (INSERT OR IGNORE) for the event tables - observations,
+  forecasts, alerts. These are historical facts keyed on a natural key
+  (station+timestamp, location+startTime, CAP id). A reading that has
+  already been recorded must never be duplicated or rewritten, so the
+  table accumulates history across runs.
+
+Either way the load is idempotent: running it twice changes nothing.
+
+    python src/load_data.py
+"""
+
+import glob
+import json
+import os
+import sqlite3
+import sys
+
+from config import DB_PATH, RAW_DIR, STATE_NAMES
+
+
+# ---------- PICK THE NEWEST USABLE CAPTURE ----------
+
+def latest_capture(prefix, required=True):
+    """
+    Return the records from the newest non-empty data/raw/<prefix>_*.json.
+
+    Filenames embed a sortable YYYYmmdd_HHMMSS stamp, so sorted() gives
+    true chronological order. glob() alone returns filesystem order,
+    which is NOT sorted - relying on it picks an arbitrary file.
+
+    Captures that are empty or unparseable are skipped and the
+    next-newest is tried, so one bad run cannot blank the load.
+    """
+
+    paths = sorted(glob.glob(os.path.join(RAW_DIR, f"{prefix}_*.json")))
+
+    for path in reversed(paths):
+
+        try:
+            with open(path, "r", encoding="utf-8") as file:
+                records = json.load(file)
+        except (ValueError, OSError) as error:
+            print(f"  skipping unreadable capture {path}: {error}")
+            continue
+
+        if not records:
+            print(f"  skipping empty capture {path}")
+            continue
+
+        print(f"  using {os.path.basename(path)}  ({len(records)} records)")
+        return records
+
+    if required:
+        sys.exit(
+            f"No usable '{prefix}' capture in {RAW_DIR}. Run src/ingest.py first."
+        )
+
+    print(f"  no '{prefix}' capture found - continuing without it")
+    return []
+
+
+def section(title):
+    print("\n" + "=" * 62)
+    print(title)
+    print("=" * 62)
+
+
+conn = sqlite3.connect(DB_PATH)
 conn.execute("PRAGMA foreign_keys = ON")
 
 
-# ---------- HELPER: ADD TEAM ----------
+# ---------- REFERENCE: states, offices, locations, stations ----------
 
-def add_team(team_id):
+section("REFERENCE DATA")
 
-    # Check if team already exists
-    result = conn.execute(
-        "SELECT idTeam FROM teams WHERE idTeam = ?",
-        (team_id,)
-    ).fetchone()
+locations = latest_capture("locations")
 
-    if result:
-        return
+states_seen = {}
+offices_seen = {}
 
-    # Fetch team from API
-    url = "https://www.thesportsdb.com/api/v1/json/123/lookupteam.php"
-    response = requests.get(
-        url,
-        params={"id": team_id},
-        timeout=10
-    )
+for record in locations:
+    code = record.get("stateCode")
+    if code:
+        states_seen[code] = record.get("stateName") or STATE_NAMES.get(code, code)
 
-    data = response.json()
+    office = record.get("idOffice")
+    if office:
+        offices_seen[office] = (record.get("officeName"), code)
 
-    if not data.get("teams"):
-        print("Could not find team:", team_id)
-        return
-
-    team = data["teams"][0]
-
-    # Add League first
+for code, name in states_seen.items():
     conn.execute(
-        """INSERT OR IGNORE INTO leagues
-        (idLeague, name)
-        VALUES (?, ?)""",
-        (
-            team["idLeague"],
-            team["strLeague"]
-        )
+        """INSERT INTO states (code, name) VALUES (?, ?)
+           ON CONFLICT(code) DO UPDATE SET name = excluded.name""",
+        (code, name),
     )
 
-    # Add Venue
-    if team.get("idVenue"):
+for office, (name, code) in offices_seen.items():
+    conn.execute(
+        """INSERT INTO offices (idOffice, name, stateCode) VALUES (?, ?, ?)
+           ON CONFLICT(idOffice) DO UPDATE SET
+               name = excluded.name,
+               stateCode = excluded.stateCode""",
+        (office, name, code),
+    )
+
+station_rows = 0
+
+for record in locations:
+
+    conn.execute(
+        """INSERT INTO locations
+           (idLocation, name, stateCode, latitude, longitude, idOffice, gridX, gridY)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(idLocation) DO UPDATE SET
+               name      = excluded.name,
+               stateCode = excluded.stateCode,
+               latitude  = excluded.latitude,
+               longitude = excluded.longitude,
+               idOffice  = excluded.idOffice,
+               gridX     = excluded.gridX,
+               gridY     = excluded.gridY""",
+        (
+            record["idLocation"],
+            record.get("name"),
+            record.get("stateCode"),
+            record.get("latitude"),
+            record.get("longitude"),
+            record.get("idOffice"),
+            record.get("gridX"),
+            record.get("gridY"),
+        ),
+    )
+
+    station = record.get("station") or {}
+
+    if station.get("idStation"):
         conn.execute(
-            """INSERT OR IGNORE INTO venues
-            (idVenue, name)
-            VALUES (?, ?)""",
+            """INSERT INTO stations
+               (idStation, name, latitude, longitude, idLocation)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(idStation) DO UPDATE SET
+                   name       = excluded.name,
+                   latitude   = excluded.latitude,
+                   longitude  = excluded.longitude,
+                   idLocation = excluded.idLocation""",
             (
-                team["idVenue"],
-                team["strStadium"]
-            )
+                station["idStation"],
+                station.get("name"),
+                station.get("latitude"),
+                station.get("longitude"),
+                record["idLocation"],
+            ),
         )
+        station_rows += 1
 
-    # Add Team
-    conn.execute(
-        """INSERT OR IGNORE INTO teams
-        (idTeam, name, idLeague, idVenue)
-        VALUES (?, ?, ?, ?)""",
+print(f"  states={len(states_seen)} offices={len(offices_seen)} "
+      f"locations={len(locations)} stations={station_rows}")
+
+
+# ---------- EVENTS: observations ----------
+
+section("OBSERVATIONS")
+
+observations = latest_capture("observations", required=False)
+
+known_stations = {
+    row[0] for row in conn.execute("SELECT idStation FROM stations").fetchall()
+}
+
+inserted = skipped = 0
+
+for record in observations:
+
+    # Never let an orphan through: the FK would reject it anyway, and a
+    # clear count is more useful than a stack trace.
+    if record.get("idStation") not in known_stations:
+        skipped += 1
+        continue
+
+    cursor = conn.execute(
+        """INSERT OR IGNORE INTO observations
+           (idObservation, idStation, observedAt, temperatureC, dewpointC,
+            humidity, windSpeedKmh, windDirection, pressurePa, visibilityM,
+            textDescription, fetchedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            team["idTeam"],
-            team["strTeam"],
-            team["idLeague"],
-            team["idVenue"]
-        )
+            record["idObservation"],
+            record["idStation"],
+            record.get("observedAt"),
+            record.get("temperatureC"),
+            record.get("dewpointC"),
+            record.get("humidity"),
+            record.get("windSpeedKmh"),
+            record.get("windDirection"),
+            record.get("pressurePa"),
+            record.get("visibilityM"),
+            record.get("textDescription"),
+            record["fetchedAt"],
+        ),
     )
+    inserted += cursor.rowcount
 
-    print("Added team:", team["strTeam"])
+print(f"  new rows={inserted}  already present={len(observations) - inserted - skipped}"
+      f"  orphaned/skipped={skipped}")
 
 
-# ---------- TEAM DATA ----------
+# ---------- EVENTS: forecasts ----------
 
-team_files = glob.glob("data/raw/teams_*.json")
-team_file = team_files[-1]
+section("FORECASTS")
 
-with open(team_file, "r", encoding="utf-8") as file:
-    data = json.load(file)
+forecasts = latest_capture("forecasts", required=False)
 
-for team in data["teams"]:
+known_locations = {
+    row[0] for row in conn.execute("SELECT idLocation FROM locations").fetchall()
+}
 
-    # League
-    conn.execute(
-        """INSERT OR IGNORE INTO leagues
-        (idLeague, name)
-        VALUES (?, ?)""",
+inserted = skipped = 0
+
+for record in forecasts:
+
+    if record.get("idLocation") not in known_locations:
+        skipped += 1
+        continue
+
+    cursor = conn.execute(
+        """INSERT OR IGNORE INTO forecasts
+           (idForecast, idLocation, periodName, startTime, endTime, isDaytime,
+            temperature, temperatureUnit, windSpeed, windDirection,
+            shortForecast, detailedForecast, fetchedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            team["idLeague"],
-            team["strLeague"]
-        )
+            record["idForecast"],
+            record["idLocation"],
+            record.get("periodName"),
+            record.get("startTime"),
+            record.get("endTime"),
+            record.get("isDaytime"),
+            record.get("temperature"),
+            record.get("temperatureUnit"),
+            record.get("windSpeed"),
+            record.get("windDirection"),
+            record.get("shortForecast"),
+            record.get("detailedForecast"),
+            record["fetchedAt"],
+        ),
     )
+    inserted += cursor.rowcount
 
-    # Venue
-    if team.get("idVenue"):
+print(f"  new rows={inserted}  already present={len(forecasts) - inserted - skipped}"
+      f"  orphaned/skipped={skipped}")
+
+
+# ---------- EVENTS: alerts ----------
+
+section("ALERTS")
+
+alerts = latest_capture("alerts", required=False)
+
+inserted = 0
+
+for record in alerts:
+
+    # Alerts can name a state we do not otherwise track; register it so
+    # the foreign key holds rather than dropping the alert.
+    code = record.get("stateCode")
+
+    if code:
         conn.execute(
-            """INSERT OR IGNORE INTO venues
-            (idVenue, name)
-            VALUES (?, ?)""",
-            (
-                team["idVenue"],
-                team["strStadium"]
-            )
+            "INSERT OR IGNORE INTO states (code, name) VALUES (?, ?)",
+            (code, STATE_NAMES.get(code, code)),
         )
 
-    # Team
-    conn.execute(
-        """INSERT OR IGNORE INTO teams
-        (idTeam, name, idLeague, idVenue)
-        VALUES (?, ?, ?, ?)""",
+    cursor = conn.execute(
+        """INSERT OR IGNORE INTO alerts
+           (idAlert, stateCode, event, severity, urgency, certainty, headline,
+            areaDesc, effective, expires, description, instruction, fetchedAt)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            team["idTeam"],
-            team["strTeam"],
-            team["idLeague"],
-            team["idVenue"]
-        )
+            record["idAlert"],
+            code,
+            record.get("event"),
+            record.get("severity"),
+            record.get("urgency"),
+            record.get("certainty"),
+            record.get("headline"),
+            record.get("areaDesc"),
+            record.get("effective"),
+            record.get("expires"),
+            record.get("description"),
+            record.get("instruction"),
+            record["fetchedAt"],
+        ),
     )
+    inserted += cursor.rowcount
+
+print(f"  new rows={inserted}  already present={len(alerts) - inserted}")
 
 
-# ---------- PLAYER DATA ----------
-
-player_files = glob.glob("data/raw/players_*.json")
-player_file = player_files[-1]
-
-with open(player_file, "r", encoding="utf-8") as file:
-    data = json.load(file)
-
-for player in data:
-
-    # Make sure player's team exists
-    add_team(player["idTeam"])
-
-    conn.execute(
-        """INSERT OR IGNORE INTO players
-        (idPlayer, name, idTeam)
-        VALUES (?, ?, ?)""",
-        (
-            player["idPlayer"],
-            player["strPlayer"],
-            player["idTeam"]
-        )
-    )
-
-
-# ---------- EVENT DATA ----------
-
-event_files = glob.glob("data/raw/events_*.json")
-event_file = event_files[-1]
-
-with open(event_file, "r", encoding="utf-8") as file:
-    data = json.load(file)
-
-for event in data:
-
-    # Make sure Home Team exists
-    add_team(event["idHomeTeam"])
-
-    # Make sure Away Team exists
-    add_team(event["idAwayTeam"])
-
-    # Make sure Event League exists
-    league_result = conn.execute(
-        "SELECT idLeague FROM leagues WHERE idLeague = ?",
-        (event["idLeague"],)
-    ).fetchone()
-
-    if league_result is None:
-
-        conn.execute(
-            """INSERT OR IGNORE INTO leagues
-            (idLeague, name)
-            VALUES (?, ?)""",
-            (
-                event["idLeague"],
-                "Unknown League"
-            )
-        )
-
-    # Make sure Event Venue exists
-    venue_result = conn.execute(
-        "SELECT idVenue FROM venues WHERE idVenue = ?",
-        (event["idVenue"],)
-    ).fetchone()
-
-    if venue_result is None:
-
-        conn.execute(
-            """INSERT OR IGNORE INTO venues
-            (idVenue, name)
-            VALUES (?, ?)""",
-            (
-                event["idVenue"],
-                event.get("strVenue", "Unknown Venue")
-            )
-        )
-
-    # Insert Event
-    conn.execute(
-        """INSERT OR IGNORE INTO events
-        (idEvent, name, dateEvent, strTime, idLeague, idHomeTeam, idAwayTeam, idVenue)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (
-            event["idEvent"],
-            event["strEvent"],
-            event.get("dateEvent"),
-            event.get("strTime"),
-            event["idLeague"],
-            event["idHomeTeam"],
-            event["idAwayTeam"],
-            event["idVenue"]
-        )
-    )
-
-    print("Event added:", event["strEvent"])
-
-
-# ---------- SAVE ----------
+# ---------- COMMIT ----------
 
 conn.commit()
+
+section("ROW COUNTS")
+
+for table in ("states", "offices", "locations", "stations",
+              "observations", "forecasts", "alerts"):
+    count = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    print(f"  {table:14} {count}")
+
 conn.close()
 
-print("\nData saved to database!")
+print("\nLoad complete.")

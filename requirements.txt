@@ -1,6 +1,14 @@
-requests
-fastapi
-uvicorn
-faiss-cpu
-sentence-transformers
-numpy
+# Pinned deliberately. The brief asks that the version of any model or
+# tool used for a run be recorded, because results shift silently when a
+# dependency upgrades. Regenerate with: pip freeze > requirements.lock.txt
+
+requests==2.34.2
+fastapi==0.141.1
+uvicorn==0.52.4
+pydantic==2.13.5
+numpy==2.5.2
+faiss-cpu==1.15.0
+sentence-transformers==6.0.1
+
+# Embedding model is pinned separately in src/config.py:
+#   sentence-transformers/all-MiniLM-L6-v2 @ main  (384 dimensions)

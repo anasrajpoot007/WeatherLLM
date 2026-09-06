@@ -1,21 +1,20 @@
 """
-SportsLLM API
--------------
-FastAPI backend for the SportsLLM frontend.
+WeatherLLM API
+--------------
+FastAPI backend serving the dashboard and the retrieval layer.
 
-Serves:
-  * /api/stats             -> counts for the dashboard
-  * /api/leagues           -> all leagues
-  * /api/venues            -> all venues
-  * /api/teams             -> teams (+ league + venue + player count), filterable
-  * /api/teams/{id}        -> single team metadata + its players
-  * /api/events            -> events (+ home/away team, league, venue)
-  * /api/players           -> players (+ team), searchable
-  * /api/ask               -> vector search over the FAISS index (RAG retrieval)
+    /api/health      pipeline status
+    /api/stats       row counts for the dashboard cards
+    /api/locations   tracked cities + latest observation
+    /api/locations/{id}  one city: forecast periods + observation history
+    /api/observations    recent readings, filterable
+    /api/forecasts       forecast periods, filterable
+    /api/alerts          active alerts
+    /api/states          states with counts
+    /api/ask         vector search over the FAISS index
 
-Run from the PROJECT ROOT (so that sports.db and data/ resolve):
+Run from the PROJECT ROOT:
 
-    pip install fastapi uvicorn
     uvicorn src.api:app --reload
 
 Then open http://127.0.0.1:8000
@@ -23,6 +22,7 @@ Then open http://127.0.0.1:8000
 
 import json
 import sqlite3
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -32,27 +32,28 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-# ---------- PATHS ----------
+# Allow "uvicorn src.api:app" from the project root to import config.py,
+# which lives next to this file.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-ROOT = Path(__file__).resolve().parent.parent
+from config import (  # noqa: E402
+    DB_PATH,
+    EMBED_MODEL_NAME,
+    EMBED_MODEL_REVISION,
+    INDEX_PATH,
+    MANIFEST_PATH,
+    ROOT,
+    SEARCH_DOCS_JSON,
+    SIMILARITY_THRESHOLD,
+)
 
-DB_PATH = ROOT / "sports.db"
-INDEX_PATH = ROOT / "data" / "sports.index"
-DOCS_PATH = ROOT / "data" / "search_documents.json"
-FRONTEND_DIR = ROOT / "frontend"
+FRONTEND_DIR = Path(ROOT) / "frontend"
 
-EMBED_MODEL_NAME = "all-MiniLM-L6-v2"
-
-# Same relevance threshold used by src/search.py (L2 distance)
-DISTANCE_THRESHOLD = 1.0
-
-
-# ---------- APP ----------
 
 app = FastAPI(
-    title="SportsLLM API",
-    description="Teams, events and vector search over the sports knowledge base.",
-    version="1.0.0",
+    title="WeatherLLM API",
+    description="Live NWS weather data, relational tables and semantic search.",
+    version="2.0.0",
 )
 
 app.add_middleware(
@@ -66,10 +67,10 @@ app.add_middleware(
 # ---------- DATABASE ----------
 
 def get_connection() -> sqlite3.Connection:
-    if not DB_PATH.exists():
+    if not Path(DB_PATH).exists():
         raise HTTPException(
             status_code=500,
-            detail=f"Database not found at {DB_PATH}. Run src/create_db.py and src/load_data.py first.",
+            detail="Database not found. Run src/create_db.py and src/load_data.py.",
         )
 
     conn = sqlite3.connect(DB_PATH)
@@ -86,37 +87,13 @@ def query_all(sql: str, params: tuple = ()) -> List[Dict[str, Any]]:
     return [dict(row) for row in rows]
 
 
-def table_columns(table: str) -> List[str]:
-    """Column names of a table, used for optional-column support."""
-    conn = get_connection()
-    try:
-        rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
-    finally:
-        conn.close()
-    return [row["name"] for row in rows]
-
-
-def event_date_columns() -> Dict[str, Optional[str]]:
-    """
-    The schema may or may not carry dateEvent / strTime yet.
-    Detect it so the API works before and after that migration.
-    """
-    columns = table_columns("events")
-    return {
-        "date": "dateEvent" if "dateEvent" in columns else None,
-        "time": "strTime" if "strTime" in columns else None,
-    }
-
-
-# ---------- VECTOR SEARCH (lazy loaded) ----------
+# ---------- VECTOR SEARCH (lazy) ----------
 
 class VectorSearchEngine:
     """
-    Wraps the FAISS index + sentence-transformers model.
-
-    Loaded lazily on the first /api/ask call so the server starts instantly.
-    If FAISS, the model, or the index files are unavailable, `available`
-    stays False and /api/ask falls back to a SQL keyword search.
+    FAISS + sentence-transformers, loaded on the first /api/ask call so
+    the server starts instantly. If anything is missing, `available`
+    stays False and /api/ask falls back to SQL keyword search.
     """
 
     def __init__(self) -> None:
@@ -137,24 +114,37 @@ class VectorSearchEngine:
         self.loaded = True
 
         try:
-            if not INDEX_PATH.exists() or not DOCS_PATH.exists():
+            if not Path(INDEX_PATH).exists() or not Path(SEARCH_DOCS_JSON).exists():
                 self.error = (
-                    "Vector index not found. Run src/prepare_text.py, "
-                    "src/embed.py and src/vector_search.py to build it."
+                    "Vector index not built. Run src/prepare_text.py, "
+                    "src/embed.py and src/vector_search.py."
                 )
                 return
 
-            import faiss  # noqa: WPS433 (deliberate lazy import)
-            from sentence_transformers import SentenceTransformer  # noqa: WPS433
+            import faiss
+            from sentence_transformers import SentenceTransformer
 
             self.index = faiss.read_index(str(INDEX_PATH))
 
-            with open(DOCS_PATH, "r", encoding="utf-8") as file:
-                self.documents = json.load(file)
+            with open(SEARCH_DOCS_JSON, "r", encoding="utf-8") as file:
+                store = json.load(file)
 
-            self.model = SentenceTransformer(EMBED_MODEL_NAME)
+            self.documents = store["documents"]
 
-        except Exception as exc:  # pragma: no cover - environment dependent
+            built_with = store.get("model")
+
+            if built_with and built_with != EMBED_MODEL_NAME:
+                self.error = (
+                    f"Index built with '{built_with}' but config expects "
+                    f"'{EMBED_MODEL_NAME}'. Rebuild the index."
+                )
+                return
+
+            self.model = SentenceTransformer(
+                EMBED_MODEL_NAME, revision=EMBED_MODEL_REVISION
+            )
+
+        except Exception as exc:
             self.error = f"{type(exc).__name__}: {exc}"
 
     def search(self, question: str, top_k: int = 5) -> List[Dict[str, Any]]:
@@ -163,26 +153,27 @@ class VectorSearchEngine:
         if not self.available:
             return []
 
-        query_vector = self.model.encode([question])
-        distances, indices = self.index.search(query_vector, top_k)
+        vector = self.model.encode(
+            [question], convert_to_numpy=True, normalize_embeddings=True
+        ).astype("float32")
+
+        scores, positions = self.index.search(vector, top_k)
 
         results = []
 
-        for distance, position in zip(distances[0], indices[0]):
+        for score, position in zip(scores[0], positions[0]):
 
             if position < 0 or position >= len(self.documents):
                 continue
 
             document = self.documents[position]
 
-            results.append(
-                {
-                    "text": document.get("text", ""),
-                    "metadata": document.get("metadata", {}),
-                    "distance": round(float(distance), 4),
-                    "relevant": bool(distance <= DISTANCE_THRESHOLD),
-                }
-            )
+            results.append({
+                "text": document.get("text", ""),
+                "metadata": document.get("metadata", {}),
+                "score": round(float(score), 4),
+                "relevant": bool(score >= SIMILARITY_THRESHOLD),
+            })
 
         return results
 
@@ -192,34 +183,30 @@ engine = VectorSearchEngine()
 
 STOP_WORDS = {
     "the", "a", "an", "is", "are", "was", "were", "of", "in", "at", "on",
-    "for", "to", "and", "or", "what", "which", "who", "where", "does",
-    "do", "did", "play", "plays", "team", "teams", "tell", "me", "about",
-    "from", "their", "his", "her", "its", "please", "show",
+    "for", "to", "and", "or", "what", "which", "who", "where", "when",
+    "will", "it", "be", "does", "do", "did", "tell", "me", "about",
+    "from", "their", "its", "please", "show", "any", "there", "going",
+    "this", "that", "weather", "forecast",
 }
 
 
 def keyword_fallback(question: str, top_k: int = 5) -> List[Dict[str, Any]]:
-    """
-    Plain SQL search used when the vector index is unavailable.
+    """SQL LIKE search used when the vector index is unavailable."""
 
-    Matches on individual words rather than the whole sentence, so
-    "Which stadium does Everton play at?" still finds Everton.
-    """
     words = [
-        word.strip("?.,!'\"")
-        for word in question.lower().split()
-        if word.strip("?.,!'\"") and word.strip("?.,!'\"") not in STOP_WORDS
+        word.strip("?.,!'\"").lower()
+        for word in question.split()
     ]
+    words = [word for word in words if word and word not in STOP_WORDS]
 
     if not words:
-        words = [question.strip()]
+        words = [question.strip().lower()]
 
-    conditions = []
-    params: List[Any] = []
+    conditions, params = [], []
 
     for word in words[:6]:
         conditions.append(
-            "(teams.name LIKE ? OR leagues.name LIKE ? OR venues.name LIKE ?)"
+            "(f.detailedForecast LIKE ? OR l.name LIKE ? OR f.shortForecast LIKE ?)"
         )
         params.extend([f"%{word}%"] * 3)
 
@@ -227,13 +214,12 @@ def keyword_fallback(question: str, top_k: int = 5) -> List[Dict[str, Any]]:
 
     rows = query_all(
         f"""
-        SELECT teams.name AS team,
-               leagues.name AS league,
-               venues.name AS venue
-        FROM teams
-        LEFT JOIN leagues ON teams.idLeague = leagues.idLeague
-        LEFT JOIN venues  ON teams.idVenue  = venues.idVenue
+        SELECT f.idForecast, f.detailedForecast, f.periodName,
+               l.name AS location, l.stateCode
+        FROM forecasts f
+        JOIN locations l ON f.idLocation = l.idLocation
         WHERE {" OR ".join(conditions)}
+        ORDER BY f.startTime
         LIMIT ?
         """,
         tuple(params),
@@ -241,18 +227,47 @@ def keyword_fallback(question: str, top_k: int = 5) -> List[Dict[str, Any]]:
 
     return [
         {
-            "text": f"Team: {row['team']}. League: {row['league']}. Stadium: {row['venue']}.",
+            "text": f"{row['location']}, {row['stateCode']} - "
+                    f"{row['periodName']} forecast: {row['detailedForecast']}",
             "metadata": {
-                "team": row["team"],
-                "league": row["league"],
-                "venue": row["venue"],
-                "source": "sql_keyword_fallback",
+                "source_table": "forecasts",
+                "source_id": row["idForecast"],
+                "doc_type": "forecast",
+                "location": row["location"],
+                "state": row["stateCode"],
+                "period": row["periodName"],
             },
-            "distance": None,
+            "score": None,
             "relevant": True,
         }
         for row in rows
     ]
+
+
+def build_answer(results: List[Dict[str, Any]]) -> str:
+    """A short grounded summary built only from retrieved chunks."""
+
+    if not results:
+        return "Nothing in the current weather data answers that."
+
+    lines = []
+
+    for item in results[:3]:
+        metadata = item.get("metadata", {})
+
+        if metadata.get("doc_type") == "alert":
+            lines.append(
+                f"{metadata.get('event')} in effect for "
+                f"{metadata.get('area')}."
+            )
+        else:
+            text = item.get("text", "")
+            lines.append(text[:220].strip())
+
+    seen = set()
+    unique = [line for line in lines if not (line in seen or seen.add(line))]
+
+    return " ".join(unique)
 
 
 # ---------- MODELS ----------
@@ -266,253 +281,267 @@ class AskRequest(BaseModel):
 
 @app.get("/api/health")
 def health() -> Dict[str, Any]:
+    manifest = {}
+
+    if Path(MANIFEST_PATH).exists():
+        with open(MANIFEST_PATH, "r", encoding="utf-8") as file:
+            manifest = json.load(file)
+
     return {
-        "database": DB_PATH.exists(),
-        "vector_index": INDEX_PATH.exists() and DOCS_PATH.exists(),
+        "database": Path(DB_PATH).exists(),
+        "vector_index": Path(INDEX_PATH).exists(),
         "vector_engine_loaded": engine.loaded,
         "vector_engine_error": engine.error,
-        "event_dates": event_date_columns()["date"] is not None,
+        "manifest": manifest,
     }
 
 
 @app.get("/api/stats")
-def stats() -> Dict[str, int]:
+def stats() -> Dict[str, Any]:
     conn = get_connection()
     try:
         counts = {
             table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
-            for table in ("teams", "players", "events", "leagues", "venues")
+            for table in ("states", "offices", "locations", "stations",
+                          "observations", "forecasts", "alerts")
         }
+
+        latest = conn.execute(
+            "SELECT MAX(fetchedAt) FROM observations"
+        ).fetchone()[0]
+
+        extremes = conn.execute(
+            """
+            SELECT MIN(temperatureC), MAX(temperatureC), AVG(temperatureC)
+            FROM observations ob
+            WHERE ob.observedAt = (
+                SELECT MAX(o2.observedAt) FROM observations o2
+                WHERE o2.idStation = ob.idStation
+            )
+            """
+        ).fetchone()
     finally:
         conn.close()
+
+    counts["last_fetch"] = latest
+    counts["temp_min_c"] = extremes[0]
+    counts["temp_max_c"] = extremes[1]
+    counts["temp_avg_c"] = round(extremes[2], 1) if extremes[2] is not None else None
+
     return counts
 
 
-@app.get("/api/leagues")
-def leagues() -> List[Dict[str, Any]]:
+@app.get("/api/states")
+def states() -> List[Dict[str, Any]]:
     return query_all(
         """
-        SELECT leagues.idLeague   AS id,
-               leagues.name       AS name,
-               COUNT(teams.idTeam) AS teams
-        FROM leagues
-        LEFT JOIN teams ON teams.idLeague = leagues.idLeague
-        GROUP BY leagues.idLeague, leagues.name
-        ORDER BY teams DESC, leagues.name
+        SELECT s.code, s.name,
+               COUNT(DISTINCT l.idLocation) AS locations,
+               COUNT(DISTINCT a.idAlert)    AS alerts
+        FROM states s
+        LEFT JOIN locations l ON l.stateCode = s.code
+        LEFT JOIN alerts    a ON a.stateCode = s.code
+        GROUP BY s.code
+        ORDER BY s.name
         """
     )
 
 
-@app.get("/api/venues")
-def venues() -> List[Dict[str, Any]]:
-    return query_all(
-        """
-        SELECT venues.idVenue     AS id,
-               venues.name        AS name,
-               COUNT(teams.idTeam) AS teams
-        FROM venues
-        LEFT JOIN teams ON teams.idVenue = venues.idVenue
-        GROUP BY venues.idVenue, venues.name
-        ORDER BY venues.name
-        """
-    )
-
-
-@app.get("/api/teams")
-def teams(
-    search: str = Query("", description="Match on team, league or venue name"),
-    league: Optional[int] = Query(None, description="Filter by idLeague"),
-    limit: int = Query(200, ge=1, le=1000),
+@app.get("/api/locations")
+def locations(
+    search: str = Query(""),
+    state: Optional[str] = Query(None),
 ) -> List[Dict[str, Any]]:
+    """Tracked cities, each with its most recent observation."""
 
     sql = """
-        SELECT teams.idTeam        AS id,
-               teams.name          AS name,
-               leagues.idLeague    AS league_id,
-               leagues.name        AS league,
-               venues.idVenue      AS venue_id,
-               venues.name         AS venue,
-               COUNT(players.idPlayer) AS players
-        FROM teams
-        LEFT JOIN leagues ON teams.idLeague = leagues.idLeague
-        LEFT JOIN venues  ON teams.idVenue  = venues.idVenue
-        LEFT JOIN players ON players.idTeam = teams.idTeam
+        SELECT l.idLocation, l.name, l.stateCode, l.latitude, l.longitude,
+               l.idOffice, l.gridX, l.gridY,
+               s.name AS stateName,
+               st.idStation, st.name AS stationName,
+               ob.temperatureC, ob.humidity, ob.windSpeedKmh,
+               ob.textDescription, ob.observedAt,
+               (SELECT COUNT(*) FROM forecasts f
+                 WHERE f.idLocation = l.idLocation)  AS forecastCount,
+               (SELECT COUNT(*) FROM alerts a
+                 WHERE a.stateCode = l.stateCode)    AS alertCount
+        FROM locations l
+        LEFT JOIN states   s  ON l.stateCode = s.code
+        LEFT JOIN stations st ON st.idLocation = l.idLocation
+        LEFT JOIN observations ob
+               ON ob.idStation = st.idStation
+              AND ob.observedAt = (
+                    SELECT MAX(o2.observedAt) FROM observations o2
+                    WHERE o2.idStation = st.idStation
+              )
         WHERE 1 = 1
     """
     params: List[Any] = []
 
     if search:
-        sql += """
-            AND (teams.name LIKE ?
-                 OR leagues.name LIKE ?
-                 OR venues.name LIKE ?)
-        """
+        sql += " AND (l.name LIKE ? OR s.name LIKE ? OR l.stateCode LIKE ?)"
         pattern = f"%{search}%"
-        params.extend([pattern, pattern, pattern])
+        params.extend([pattern] * 3)
 
-    if league is not None:
-        sql += " AND teams.idLeague = ?"
-        params.append(league)
+    if state:
+        sql += " AND l.stateCode = ?"
+        params.append(state)
 
-    sql += """
-        GROUP BY teams.idTeam
-        ORDER BY teams.name
-        LIMIT ?
-    """
-    params.append(limit)
+    sql += " ORDER BY l.name"
 
     return query_all(sql, tuple(params))
 
 
-@app.get("/api/teams/{team_id}")
-def team_detail(team_id: int) -> Dict[str, Any]:
+@app.get("/api/locations/{location_id}")
+def location_detail(location_id: str) -> Dict[str, Any]:
 
     rows = query_all(
         """
-        SELECT teams.idTeam     AS id,
-               teams.name       AS name,
-               leagues.idLeague AS league_id,
-               leagues.name     AS league,
-               venues.idVenue   AS venue_id,
-               venues.name      AS venue
-        FROM teams
-        LEFT JOIN leagues ON teams.idLeague = leagues.idLeague
-        LEFT JOIN venues  ON teams.idVenue  = venues.idVenue
-        WHERE teams.idTeam = ?
+        SELECT l.idLocation, l.name, l.stateCode, l.latitude, l.longitude,
+               l.idOffice, l.gridX, l.gridY, s.name AS stateName,
+               o.name AS officeName
+        FROM locations l
+        LEFT JOIN states  s ON l.stateCode = s.code
+        LEFT JOIN offices o ON l.idOffice  = o.idOffice
+        WHERE l.idLocation = ?
         """,
-        (team_id,),
+        (location_id,),
     )
 
     if not rows:
-        raise HTTPException(status_code=404, detail="Team not found")
+        raise HTTPException(status_code=404, detail="Location not found")
 
-    team = rows[0]
+    location = rows[0]
 
-    team["players"] = query_all(
+    location["station"] = query_all(
+        "SELECT idStation, name, latitude, longitude FROM stations WHERE idLocation = ?",
+        (location_id,),
+    )
+
+    location["forecasts"] = query_all(
         """
-        SELECT idPlayer AS id, name
-        FROM players
-        WHERE idTeam = ?
-        ORDER BY name
+        SELECT idForecast, periodName, startTime, isDaytime, temperature,
+               temperatureUnit, windSpeed, windDirection, shortForecast,
+               detailedForecast
+        FROM forecasts
+        WHERE idLocation = ?
+        ORDER BY startTime
+        LIMIT 14
         """,
-        (team_id,),
+        (location_id,),
     )
 
-    date_column = event_date_columns()["date"]
-    date_select = f"events.{date_column} AS date," if date_column else "NULL AS date,"
-
-    team["events"] = query_all(
-        f"""
-        SELECT events.idEvent AS id,
-               events.name    AS name,
-               {date_select}
-               home.name      AS home_team,
-               away.name      AS away_team,
-               venues.name    AS venue
-        FROM events
-        LEFT JOIN teams home  ON events.idHomeTeam = home.idTeam
-        LEFT JOIN teams away  ON events.idAwayTeam = away.idTeam
-        LEFT JOIN venues      ON events.idVenue    = venues.idVenue
-        WHERE events.idHomeTeam = ? OR events.idAwayTeam = ?
+    location["observations"] = query_all(
+        """
+        SELECT ob.idObservation, ob.observedAt, ob.temperatureC, ob.humidity,
+               ob.windSpeedKmh, ob.textDescription
+        FROM observations ob
+        JOIN stations st ON ob.idStation = st.idStation
+        WHERE st.idLocation = ?
+        ORDER BY ob.observedAt DESC
+        LIMIT 24
         """,
-        (team_id, team_id),
+        (location_id,),
     )
 
-    return team
+    location["alerts"] = query_all(
+        """
+        SELECT idAlert, event, severity, headline, areaDesc, expires
+        FROM alerts
+        WHERE stateCode = ?
+        ORDER BY effective DESC
+        """,
+        (location["stateCode"],),
+    )
+
+    return location
 
 
-@app.get("/api/events")
-def events(
-    search: str = Query(""),
-    league: Optional[int] = Query(None),
-    limit: int = Query(200, ge=1, le=1000),
+@app.get("/api/observations")
+def observations(
+    location: Optional[str] = Query(None),
+    limit: int = Query(200, ge=1, le=2000),
 ) -> List[Dict[str, Any]]:
 
-    columns = event_date_columns()
-    date_column = columns["date"]
-    time_column = columns["time"]
-
-    date_select = f"events.{date_column} AS date," if date_column else "NULL AS date,"
-    time_select = f"events.{time_column} AS time," if time_column else "NULL AS time,"
-
-    sql = f"""
-        SELECT events.idEvent   AS id,
-               events.name      AS name,
-               {date_select}
-               {time_select}
-               leagues.idLeague AS league_id,
-               leagues.name     AS league,
-               home.idTeam      AS home_team_id,
-               home.name        AS home_team,
-               away.idTeam      AS away_team_id,
-               away.name        AS away_team,
-               venues.idVenue   AS venue_id,
-               venues.name      AS venue
-        FROM events
-        LEFT JOIN leagues    ON events.idLeague   = leagues.idLeague
-        LEFT JOIN teams home ON events.idHomeTeam = home.idTeam
-        LEFT JOIN teams away ON events.idAwayTeam = away.idTeam
-        LEFT JOIN venues     ON events.idVenue    = venues.idVenue
+    sql = """
+        SELECT ob.idObservation, ob.observedAt, ob.temperatureC, ob.dewpointC,
+               ob.humidity, ob.windSpeedKmh, ob.windDirection, ob.pressurePa,
+               ob.visibilityM, ob.textDescription,
+               st.idStation, st.name AS stationName,
+               l.idLocation, l.name AS location, l.stateCode
+        FROM observations ob
+        JOIN stations  st ON ob.idStation = st.idStation
+        JOIN locations l  ON st.idLocation = l.idLocation
         WHERE 1 = 1
     """
     params: List[Any] = []
 
-    if search:
-        sql += """
-            AND (events.name LIKE ?
-                 OR home.name LIKE ?
-                 OR away.name LIKE ?
-                 OR venues.name LIKE ?)
-        """
-        pattern = f"%{search}%"
-        params.extend([pattern] * 4)
+    if location:
+        sql += " AND l.idLocation = ?"
+        params.append(location)
 
-    if league is not None:
-        sql += " AND events.idLeague = ?"
-        params.append(league)
-
-    # Sort by date when the column exists, otherwise fall back to the name.
-    if date_column:
-        sql += f" ORDER BY events.{date_column} IS NULL, events.{date_column}, events.name"
-    else:
-        sql += " ORDER BY events.name"
-
-    sql += " LIMIT ?"
+    sql += " ORDER BY ob.observedAt DESC LIMIT ?"
     params.append(limit)
 
     return query_all(sql, tuple(params))
 
 
-@app.get("/api/players")
-def players(
+@app.get("/api/forecasts")
+def forecasts(
+    location: Optional[str] = Query(None),
     search: str = Query(""),
-    team: Optional[int] = Query(None),
+    limit: int = Query(200, ge=1, le=2000),
+) -> List[Dict[str, Any]]:
+
+    sql = """
+        SELECT f.idForecast, f.periodName, f.startTime, f.isDaytime,
+               f.temperature, f.temperatureUnit, f.windSpeed, f.windDirection,
+               f.shortForecast, f.detailedForecast,
+               l.idLocation, l.name AS location, l.stateCode
+        FROM forecasts f
+        JOIN locations l ON f.idLocation = l.idLocation
+        WHERE 1 = 1
+    """
+    params: List[Any] = []
+
+    if location:
+        sql += " AND f.idLocation = ?"
+        params.append(location)
+
+    if search:
+        sql += """ AND (f.detailedForecast LIKE ?
+                        OR f.shortForecast LIKE ?
+                        OR l.name LIKE ?)"""
+        pattern = f"%{search}%"
+        params.extend([pattern] * 3)
+
+    sql += " ORDER BY l.name, f.startTime LIMIT ?"
+    params.append(limit)
+
+    return query_all(sql, tuple(params))
+
+
+@app.get("/api/alerts")
+def alerts(
+    state: Optional[str] = Query(None),
     limit: int = Query(100, ge=1, le=1000),
 ) -> List[Dict[str, Any]]:
 
     sql = """
-        SELECT players.idPlayer AS id,
-               players.name     AS name,
-               teams.idTeam     AS team_id,
-               teams.name       AS team,
-               leagues.name     AS league
-        FROM players
-        LEFT JOIN teams   ON players.idTeam = teams.idTeam
-        LEFT JOIN leagues ON teams.idLeague = leagues.idLeague
+        SELECT a.idAlert, a.stateCode, a.event, a.severity, a.urgency,
+               a.certainty, a.headline, a.areaDesc, a.effective, a.expires,
+               a.description, a.instruction, s.name AS stateName
+        FROM alerts a
+        LEFT JOIN states s ON a.stateCode = s.code
         WHERE 1 = 1
     """
     params: List[Any] = []
 
-    if search:
-        sql += " AND (players.name LIKE ? OR teams.name LIKE ?)"
-        pattern = f"%{search}%"
-        params.extend([pattern, pattern])
+    if state:
+        sql += " AND a.stateCode = ?"
+        params.append(state)
 
-    if team is not None:
-        sql += " AND players.idTeam = ?"
-        params.append(team)
-
-    sql += " ORDER BY players.name LIMIT ?"
+    sql += " ORDER BY a.effective DESC LIMIT ?"
     params.append(limit)
 
     return query_all(sql, tuple(params))
@@ -534,7 +563,7 @@ def ask(request: AskRequest) -> Dict[str, Any]:
         return {
             "question": question,
             "mode": "vector",
-            "answer": build_answer(question, relevant),
+            "answer": build_answer(relevant),
             "results": relevant,
             "considered": results,
             "note": None,
@@ -545,36 +574,11 @@ def ask(request: AskRequest) -> Dict[str, Any]:
     return {
         "question": question,
         "mode": "keyword",
-        "answer": build_answer(question, fallback),
+        "answer": build_answer(fallback),
         "results": fallback,
         "considered": fallback,
         "note": engine.error or "Vector index unavailable - using SQL keyword search.",
     }
-
-
-def build_answer(question: str, results: List[Dict[str, Any]]) -> str:
-    """A short, grounded summary sentence built only from retrieved chunks."""
-    if not results:
-        return "No relevant result found in the knowledge base for that question."
-
-    lines = []
-
-    for item in results[:3]:
-        metadata = item.get("metadata", {})
-        team = metadata.get("team")
-        league = metadata.get("league")
-        venue = metadata.get("venue")
-
-        if team:
-            lines.append(f"{team} play in the {league} at {venue}.")
-        else:
-            lines.append(item.get("text", "").strip())
-
-    # De-duplicate while preserving order (chunking can repeat a team).
-    seen = set()
-    unique = [line for line in lines if not (line in seen or seen.add(line))]
-
-    return " ".join(unique)
 
 
 # ---------- FRONTEND ----------

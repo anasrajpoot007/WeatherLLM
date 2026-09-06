@@ -1,0 +1,18 @@
+{
+  "built_at": "2026-09-06T17:29:45.469163+00:00",
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "embedding_revision": "main",
+  "dimensions": 384,
+  "vectors": 299,
+  "index_type": "IndexFlatIP",
+  "metric": "cosine (inner product on normalised vectors)",
+  "chunking": {
+    "forecast": "whole document (1-3 sentences, already coherent)",
+    "alert": "sliding window, 120 words, 30 overlap",
+    "min_chunk_words": 40
+  },
+  "doc_types": {
+    "forecast": 217,
+    "alert": 82
+  }
+}

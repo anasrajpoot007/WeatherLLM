@@ -1,151 +1,404 @@
-import requests
+"""
+Step 2 - Ingestion
+------------------
+Pulls live data from api.weather.gov and writes timestamped raw captures
+to data/raw/. Raw captures are never modified after they are written -
+every downstream stage reads these files, not the API, so any run can be
+replayed offline when something breaks further down the pipeline.
+
+    python src/ingest.py                 # full run
+    python src/ingest.py --skip-reference  # reuse cached grid metadata
+
+Writes, all sharing one timestamp:
+    data/raw/locations_<ts>.json     reference: city -> office/grid/station
+    data/raw/observations_<ts>.json  event: latest station readings
+    data/raw/forecasts_<ts>.json     event: forecast periods (narrative text)
+    data/raw/alerts_<ts>.json        event: active alerts (narrative text)
+
+A capture is only written when it holds at least one record, so a failed
+or empty run can never become the "newest" file the loader picks up.
+
+Call budget for 15 cities:
+    reference pass : 15 x /points + 15 x /stations       = 30 calls
+    every run      : 15 x observations + 15 x forecasts  = 30 calls
+                     + 1 /alerts call per distinct state = ~13 calls
+Reference data is cached to data/reference_cache.json and refreshed only
+with --refresh-reference, because grid cells and station assignments are
+slow-changing: re-fetching them daily is wasted quota.
+"""
+
+import argparse
 import json
-import time
-from datetime import datetime
+import os
+import sys
+from datetime import datetime, timezone
 
-LEAGUE_ID = "4328"
-BASE_URL = "https://www.thesportsdb.com/api/v1/json/123"
+from config import BASE_URL, DATA_DIR, LOCATIONS, RAW_DIR, STATE_NAMES
+from nws_client import NWSError, try_get
 
+REFERENCE_CACHE = os.path.join(DATA_DIR, "reference_cache.json")
+
+fetched_at = datetime.now(timezone.utc).isoformat()
 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
 
 
-# ---------- DISCOVER TEAMS ----------
+# ==============================
+# HELPERS
+# ==============================
 
-url = f"{BASE_URL}/lookup_all_teams.php"
+def save_capture(name, payload, count):
+    """Write a raw capture, but only if it actually holds records."""
 
-response = requests.get(
-    url,
-    params={"id": LEAGUE_ID},
-    timeout=10
-)
+    if count == 0:
+        print(f"  SKIPPED writing {name} - capture was empty.")
+        return False
 
-print("Teams Status:", response.status_code)
+    os.makedirs(RAW_DIR, exist_ok=True)
+    path = os.path.join(RAW_DIR, f"{name}_{timestamp}.json")
 
-team_data = response.json()
-teams = team_data.get("teams", [])
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(payload, file, indent=2)
 
-print("Teams discovered:", len(teams))
+    print(f"  wrote {path}  ({count} records)")
+    return True
 
 
-# ---------- GET EVENTS FROM TEAMS ----------
+def measurement(properties, key):
+    """
+    NWS wraps every measurement as {'value': x, 'unitCode': ..., ...}
+    and 'value' is null more often than you would expect. Flatten it to
+    a plain float or None.
+    """
+    field = properties.get(key)
 
-all_events = {}
+    if not isinstance(field, dict):
+        return None
 
-for team in teams:
+    value = field.get("value")
 
-    team_id = team["idTeam"]
+    return float(value) if isinstance(value, (int, float)) else None
 
-    response = requests.get(
-        f"{BASE_URL}/eventsnext.php",
-        params={"id": team_id},
-        timeout=10
+
+def section(title):
+    print("\n" + "=" * 62)
+    print(title)
+    print("=" * 62)
+
+
+# ==============================
+# REFERENCE PASS
+# ==============================
+
+def fetch_reference():
+    """
+    Resolve every configured city to its NWS office, grid cell and
+    nearest observation station. Slow-changing - cached between runs.
+    """
+
+    section("REFERENCE PASS  (/points and /stations)")
+
+    resolved = []
+
+    for location in LOCATIONS:
+
+        print(f"  {location['name']}, {location['state']}")
+
+        points = try_get(f"{BASE_URL}/points/{location['lat']},{location['lon']}")
+
+        if not points:
+            print("    could not resolve grid - skipping this city")
+            continue
+
+        props = points["properties"]
+
+        record = {
+            "idLocation": location["id"],
+            "name": location["name"],
+            "stateCode": location["state"],
+            "stateName": STATE_NAMES.get(location["state"], location["state"]),
+            "latitude": location["lat"],
+            "longitude": location["lon"],
+            "idOffice": props.get("gridId"),
+            "gridX": props.get("gridX"),
+            "gridY": props.get("gridY"),
+            "officeName": (props.get("relativeLocation") or {})
+                          .get("properties", {})
+                          .get("city"),
+            "station": None,
+        }
+
+        stations = try_get(
+            f"{BASE_URL}/gridpoints/{record['idOffice']}/"
+            f"{record['gridX']},{record['gridY']}/stations"
+        )
+
+        features = (stations or {}).get("features") or []
+
+        if features:
+            # The list is returned nearest-first.
+            station_props = features[0]["properties"]
+            geometry = features[0].get("geometry") or {}
+            coordinates = geometry.get("coordinates") or [None, None]
+
+            record["station"] = {
+                "idStation": station_props.get("stationIdentifier"),
+                "name": station_props.get("name"),
+                "longitude": coordinates[0],
+                "latitude": coordinates[1],
+            }
+            print(f"    office={record['idOffice']} "
+                  f"grid={record['gridX']},{record['gridY']} "
+                  f"station={record['station']['idStation']}")
+        else:
+            print(f"    office={record['idOffice']} - no stations found")
+
+        resolved.append(record)
+
+    return resolved
+
+
+def load_reference_cache():
+    if not os.path.exists(REFERENCE_CACHE):
+        return None
+
+    try:
+        with open(REFERENCE_CACHE, "r", encoding="utf-8") as file:
+            data = json.load(file)
+    except (ValueError, OSError):
+        return None
+
+    return data or None
+
+
+def save_reference_cache(records):
+    os.makedirs(DATA_DIR, exist_ok=True)
+
+    with open(REFERENCE_CACHE, "w", encoding="utf-8") as file:
+        json.dump(records, file, indent=2)
+
+
+# ==============================
+# EVENT PASSES
+# ==============================
+
+def fetch_observations(locations):
+    """Latest reading from each location's station."""
+
+    section("OBSERVATIONS  (/stations/{id}/observations/latest)")
+
+    observations = []
+
+    for location in locations:
+
+        station = location.get("station")
+
+        if not station or not station.get("idStation"):
+            continue
+
+        station_id = station["idStation"]
+
+        payload = try_get(f"{BASE_URL}/stations/{station_id}/observations/latest")
+
+        if not payload:
+            print(f"  {station_id}: no current observation")
+            continue
+
+        props = payload["properties"]
+        observed_at = props.get("timestamp")
+
+        if not observed_at:
+            print(f"  {station_id}: observation has no timestamp - skipped")
+            continue
+
+        observations.append({
+            # No id in the payload: derive a deterministic natural key so
+            # re-fetching the same reading collides instead of duplicating.
+            "idObservation": f"{station_id}@{observed_at}",
+            "idStation": station_id,
+            "idLocation": location["idLocation"],
+            "observedAt": observed_at,
+            "temperatureC": measurement(props, "temperature"),
+            "dewpointC": measurement(props, "dewpoint"),
+            "humidity": measurement(props, "relativeHumidity"),
+            "windSpeedKmh": measurement(props, "windSpeed"),
+            "windDirection": measurement(props, "windDirection"),
+            "pressurePa": measurement(props, "barometricPressure"),
+            "visibilityM": measurement(props, "visibility"),
+            "textDescription": props.get("textDescription"),
+            "fetchedAt": fetched_at,
+        })
+
+        temperature = observations[-1]["temperatureC"]
+        shown = f"{temperature:.1f}C" if temperature is not None else "n/a"
+        print(f"  {station_id}: {shown}  {props.get('textDescription')}")
+
+    return observations
+
+
+def fetch_forecasts(locations):
+    """Forecast periods per location. Carries the narrative text."""
+
+    section("FORECASTS  (/gridpoints/{office}/{x},{y}/forecast)")
+
+    forecasts = []
+
+    for location in locations:
+
+        if not location.get("idOffice"):
+            continue
+
+        payload = try_get(
+            f"{BASE_URL}/gridpoints/{location['idOffice']}/"
+            f"{location['gridX']},{location['gridY']}/forecast"
+        )
+
+        if not payload:
+            print(f"  {location['name']}: no forecast returned")
+            continue
+
+        periods = payload["properties"].get("periods") or []
+
+        for period in periods:
+
+            start = period.get("startTime")
+
+            if not start:
+                continue
+
+            forecasts.append({
+                "idForecast": f"{location['idLocation']}@{start}",
+                "idLocation": location["idLocation"],
+                "periodName": period.get("name"),
+                "startTime": start,
+                "endTime": period.get("endTime"),
+                "isDaytime": 1 if period.get("isDaytime") else 0,
+                "temperature": period.get("temperature"),
+                "temperatureUnit": period.get("temperatureUnit"),
+                "windSpeed": period.get("windSpeed"),
+                "windDirection": period.get("windDirection"),
+                "shortForecast": period.get("shortForecast"),
+                "detailedForecast": period.get("detailedForecast"),
+                "fetchedAt": fetched_at,
+            })
+
+        print(f"  {location['name']}: {len(periods)} periods")
+
+    return forecasts
+
+
+def fetch_alerts(locations):
+    """Active alerts, one call per distinct state. Richest text source."""
+
+    section("ALERTS  (/alerts/active?area={state})")
+
+    states = sorted({location["stateCode"] for location in locations})
+
+    alerts = []
+
+    for state in states:
+
+        payload = try_get(f"{BASE_URL}/alerts/active", params={"area": state})
+
+        features = (payload or {}).get("features") or []
+
+        for feature in features:
+
+            props = feature.get("properties") or {}
+            alert_id = props.get("id") or feature.get("id")
+
+            if not alert_id:
+                continue
+
+            alerts.append({
+                "idAlert": alert_id,
+                "stateCode": state,
+                "event": props.get("event"),
+                "severity": props.get("severity"),
+                "urgency": props.get("urgency"),
+                "certainty": props.get("certainty"),
+                "headline": props.get("headline"),
+                "areaDesc": props.get("areaDesc"),
+                "effective": props.get("effective"),
+                "expires": props.get("expires"),
+                "description": props.get("description"),
+                "instruction": props.get("instruction"),
+                "fetchedAt": fetched_at,
+            })
+
+        print(f"  {state}: {len(features)} active")
+
+    # One alert can be returned for several states; dedupe on the CAP id.
+    unique = {}
+    for alert in alerts:
+        unique.setdefault(alert["idAlert"], alert)
+
+    return list(unique.values())
+
+
+# ==============================
+# MAIN
+# ==============================
+
+def main():
+
+    parser = argparse.ArgumentParser(description="Ingest live NWS weather data.")
+    parser.add_argument(
+        "--refresh-reference",
+        action="store_true",
+        help="Re-resolve city -> office/grid/station instead of using the cache.",
     )
+    arguments = parser.parse_args()
 
-    print("Events:", team["strTeam"], response.status_code)
+    print(f"Run timestamp: {timestamp}")
+    print(f"Fetched at:    {fetched_at}")
 
-    if response.status_code == 200:
+    # ---- reference (cached) ----
 
-        data = response.json()
+    locations = None if arguments.refresh_reference else load_reference_cache()
 
-        for event in data.get("events", []):
+    if locations:
+        print(f"\nUsing cached reference data for {len(locations)} locations.")
+        print("(run with --refresh-reference to re-resolve grids and stations)")
+    else:
+        locations = fetch_reference()
 
-            all_events[event["idEvent"]] = event
+        if not locations:
+            sys.exit(
+                "No locations could be resolved. Nothing written - the previous "
+                "capture stays the newest one."
+            )
 
-    time.sleep(2)
+        save_reference_cache(locations)
 
+    # ---- events ----
 
-events = list(all_events.values())
+    observations = fetch_observations(locations)
+    forecasts = fetch_forecasts(locations)
+    alerts = fetch_alerts(locations)
 
-print("Unique events found:", len(events))
+    # ---- persist ----
 
+    section("WRITING RAW CAPTURES")
 
-# Save events
+    save_capture("locations", locations, len(locations))
+    save_capture("observations", observations, len(observations))
+    save_capture("forecasts", forecasts, len(forecasts))
 
-with open(
-    f"data/raw/events_{timestamp}.json",
-    "w",
-    encoding="utf-8"
-) as file:
-    json.dump(events, file, indent=4)
+    # An empty alerts array is a legitimate state of the world (calm
+    # weather), not a failure - but writing it would create an empty
+    # "newest" capture, so it is skipped and the loader keeps the last
+    # non-empty one.
+    save_capture("alerts", alerts, len(alerts))
 
-
-# ---------- GET TEAMS FROM EVENTS ----------
-
-team_ids = set()
-
-for event in events:
-
-    team_ids.add(event["idHomeTeam"])
-    team_ids.add(event["idAwayTeam"])
-
-
-print("Teams from events:", len(team_ids))
-
-
-event_teams = []
-
-for team_id in team_ids:
-
-    response = requests.get(
-        f"{BASE_URL}/lookupteam.php",
-        params={"id": team_id},
-        timeout=10
-    )
-
-    print("Team:", team_id, response.status_code)
-
-    data = response.json()
-
-    if data.get("teams"):
-        event_teams.append(data["teams"][0])
-
-    time.sleep(2)
+    section("INGESTION COMPLETE")
+    print(f"Locations:    {len(locations)}")
+    print(f"Observations: {len(observations)}")
+    print(f"Forecasts:    {len(forecasts)}")
+    print(f"Alerts:       {len(alerts)}")
 
 
-with open(
-    f"data/raw/teams_{timestamp}.json",
-    "w",
-    encoding="utf-8"
-) as file:
-    json.dump({"teams": event_teams}, file, indent=4)
-
-
-print("Event teams saved:", len(event_teams))
-
-
-# ---------- GET PLAYERS ----------
-
-players = []
-
-for team in event_teams:
-
-    team_id = team["idTeam"]
-
-    response = requests.get(
-        f"{BASE_URL}/lookup_all_players.php",
-        params={"id": team_id},
-        timeout=10
-    )
-
-    print("Players:", team["strTeam"], response.status_code)
-
-    if response.status_code == 200:
-
-        data = response.json()
-
-        players.extend(data.get("player", []))
-
-    time.sleep(2)
-
-
-with open(
-    f"data/raw/players_{timestamp}.json",
-    "w",
-    encoding="utf-8"
-) as file:
-    json.dump(players, file, indent=4)
-
-
-print("Players saved:", len(players))
-
-print("\nDynamic ingestion completed!")
+if __name__ == "__main__":
+    try:
+        main()
+    except NWSError as error:
+        sys.exit(f"FATAL: {error}")

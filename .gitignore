@@ -1,5 +1,25 @@
+# Python
 .venv/
+venv/
 __pycache__/
 *.pyc
 .env
-data/raw/
+
+# Pipeline output
+logs/
+data/embeddings.json
+data/search_documents.json
+data/weather.index
+data/reference_cache.json
+
+# Raw captures: keep the newest few as runnable sample data (see README),
+# ignore the rest so the repo does not grow without bound.
+data/raw/*
+!data/raw/.gitkeep
+!data/raw/sample_*.json
+
+weather.db
+data/processed_documents.json
+
+# Model cache
+.cache/
