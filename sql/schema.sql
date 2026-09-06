@@ -28,6 +28,8 @@ CREATE TABLE players (
 CREATE TABLE events (
     idEvent INTEGER PRIMARY KEY,
     name TEXT,
+    dateEvent TEXT,
+    strTime TEXT,
     idLeague INTEGER,
     idHomeTeam INTEGER,
     idAwayTeam INTEGER,

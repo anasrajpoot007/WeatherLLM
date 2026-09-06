@@ -1,0 +1,1366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Sports Info</title>
+<style>
+/* ============================================================
+   Sports Info — football · deep red / black theme
+   ============================================================ */
+
+:root {
+  --bg:            #08060700;
+  --black:         #0a0708;
+  --black-2:       #120c0e;
+  --panel:         #160e11;
+  --panel-2:       #1d1216;
+  --line:          #33191f;
+  --line-soft:     #2a1419;
+
+  --red:           #b3121f;
+  --red-bright:    #e01f2d;
+  --red-deep:      #6d0a13;
+  --red-glow:      rgba(224, 31, 45, .38);
+
+  --text:          #f4e9eb;
+  --muted:         #a8888f;
+  --muted-2:       #7d6067;
+
+  --radius:        14px;
+  --ease:          cubic-bezier(.22, 1, .36, 1);
+}
+
+* { box-sizing: border-box; }
+
+html { scroll-behavior: smooth; }
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--black);
+  color: var(--text);
+  font-family: "Segoe UI", Inter, system-ui, -apple-system, sans-serif;
+  font-size: 15px;
+  line-height: 1.55;
+  overflow-x: hidden;
+}
+
+/* ---------- animated backdrop ---------- */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(900px 520px at 12% -10%, rgba(179,18,31,.30), transparent 60%),
+    radial-gradient(760px 460px at 88% 8%,  rgba(109,10,19,.34), transparent 62%),
+    radial-gradient(600px 600px at 50% 108%, rgba(179,18,31,.16), transparent 60%),
+    var(--black);
+}
+
+.backdrop::after {
+  content: "";
+  position: absolute;
+  inset: -40%;
+  background:
+    repeating-linear-gradient(115deg,
+      rgba(224,31,45,.05) 0px,
+      rgba(224,31,45,.05) 1px,
+      transparent 1px,
+      transparent 9px);
+  animation: drift 26s linear infinite;
+}
+
+@keyframes drift {
+  from { transform: translate3d(0,0,0); }
+  to   { transform: translate3d(-9px, 9px, 0); }
+}
+
+.pulse-ring {
+  position: fixed;
+  top: -180px;
+  left: 50%;
+  width: 720px;
+  height: 720px;
+  margin-left: -360px;
+  border-radius: 50%;
+  border: 1px solid rgba(224,31,45,.16);
+  z-index: 0;
+  pointer-events: none;
+  animation: breathe 9s var(--ease) infinite;
+}
+
+.pulse-ring.two { animation-delay: 3s; transform: scale(.72); opacity: .6; }
+
+/* ---------- football pitch markings ---------- */
+
+.pitch {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: .5;
+}
+
+.pitch svg { width: 100%; height: 100%; }
+
+.pitch .line {
+  fill: none;
+  stroke: rgba(224,31,45,.16);
+  stroke-width: 1.4;
+  stroke-dasharray: 1400;
+  stroke-dashoffset: 1400;
+  animation: draw 3.4s var(--ease) forwards;
+}
+
+.pitch .line:nth-child(2) { animation-delay: .25s; }
+.pitch .line:nth-child(3) { animation-delay: .45s; }
+.pitch .line:nth-child(4) { animation-delay: .65s; }
+.pitch .line:nth-child(5) { animation-delay: .85s; }
+
+@keyframes draw { to { stroke-dashoffset: 0; } }
+
+/* ---------- rolling ball ---------- */
+
+.ball {
+  position: fixed;
+  bottom: 34px;
+  left: -70px;
+  width: 34px;
+  height: 34px;
+  z-index: 0;
+  pointer-events: none;
+  opacity: .30;
+  animation: roll 19s linear infinite;
+}
+
+@keyframes roll {
+  0%   { transform: translateX(0) rotate(0deg); }
+  100% { transform: translateX(calc(100vw + 140px)) rotate(1080deg); }
+}
+
+@keyframes breathe {
+  0%   { transform: scale(.78); opacity: .0; }
+  35%  { opacity: .85; }
+  100% { transform: scale(1.35); opacity: 0; }
+}
+
+/* ---------- layout ---------- */
+
+.shell {
+  position: relative;
+  z-index: 1;
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 24px 80px;
+}
+
+/* ---------- header ---------- */
+
+header.top {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  backdrop-filter: blur(14px);
+  background: linear-gradient(180deg, rgba(10,7,8,.94), rgba(10,7,8,.72));
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.top-inner {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 14px 24px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-weight: 800;
+  letter-spacing: .4px;
+  font-size: 18px;
+}
+
+.brand .orb {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 16px;
+  background: radial-gradient(circle at 32% 28%, #ff5563, var(--red) 46%, var(--red-deep) 100%);
+  box-shadow: 0 0 0 1px rgba(255,120,130,.25), 0 0 22px var(--red-glow);
+  animation: bob 3.4s ease-in-out infinite;
+}
+
+@keyframes bob {
+  0%, 100% { transform: translateY(0) rotate(0deg); }
+  50%      { transform: translateY(-4px) rotate(180deg); }
+}
+
+.brand span.light { color: var(--red-bright); }
+
+nav.tabs {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 4px;
+}
+
+nav.tabs button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  padding: 7px 16px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: color .25s, background .35s var(--ease), transform .2s var(--ease);
+}
+
+nav.tabs button:hover { color: var(--text); transform: translateY(-1px); }
+
+nav.tabs button.active {
+  color: #fff;
+  background: linear-gradient(135deg, var(--red), var(--red-deep));
+  box-shadow: 0 4px 16px rgba(179,18,31,.45);
+}
+
+/* ---------- hero ---------- */
+
+.hero {
+  padding: 54px 0 28px;
+  text-align: center;
+}
+
+.hero h1 {
+  margin: 0 0 10px;
+  font-size: clamp(30px, 5.2vw, 50px);
+  line-height: 1.08;
+  letter-spacing: -1px;
+  font-weight: 800;
+  background: linear-gradient(100deg, #fff 8%, #ff8590 46%, var(--red-bright) 92%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.hero p {
+  margin: 0 auto;
+  max-width: 620px;
+  color: var(--muted);
+}
+
+/* ---------- ask box ---------- */
+
+.ask {
+  margin: 30px auto 0;
+  max-width: 760px;
+  position: relative;
+}
+
+.ask-shell {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 7px 7px 7px 20px;
+  transition: border-color .3s, box-shadow .4s var(--ease), transform .3s var(--ease);
+}
+
+.ask-shell:focus-within {
+  border-color: var(--red);
+  box-shadow: 0 0 0 4px rgba(179,18,31,.16), 0 14px 40px rgba(0,0,0,.6);
+  transform: translateY(-2px);
+}
+
+.ask input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: var(--text);
+  font: inherit;
+  font-size: 15.5px;
+  padding: 10px 0;
+}
+
+.ask input::placeholder { color: var(--muted-2); }
+
+button.go {
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+  color: #fff;
+  background: linear-gradient(135deg, var(--red-bright), var(--red-deep));
+  padding: 12px 26px;
+  border-radius: 999px;
+  position: relative;
+  overflow: hidden;
+  transition: transform .2s var(--ease), box-shadow .3s;
+  box-shadow: 0 6px 20px rgba(179,18,31,.4);
+}
+
+button.go:hover  { transform: translateY(-2px) scale(1.02); box-shadow: 0 10px 30px rgba(224,31,45,.55); }
+button.go:active { transform: translateY(0) scale(.98); }
+button.go[disabled] { opacity: .6; cursor: progress; }
+
+button.go::after {
+  content: "";
+  position: absolute;
+  top: 0; left: -120%;
+  width: 60%; height: 100%;
+  background: linear-gradient(100deg, transparent, rgba(255,255,255,.35), transparent);
+  transform: skewX(-20deg);
+}
+
+button.go:hover::after { animation: sheen .8s var(--ease); }
+
+@keyframes sheen { to { left: 140%; } }
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 14px;
+}
+
+.chip {
+  font-size: 12.5px;
+  color: var(--muted);
+  background: rgba(179,18,31,.10);
+  border: 1px solid var(--line-soft);
+  border-radius: 999px;
+  padding: 6px 13px;
+  cursor: pointer;
+  transition: all .25s var(--ease);
+}
+
+.chip:hover {
+  color: #fff;
+  border-color: var(--red);
+  background: rgba(224,31,45,.20);
+  transform: translateY(-2px);
+}
+
+/* ---------- answer panel ---------- */
+
+.answer {
+  margin: 22px auto 0;
+  max-width: 860px;
+  background: linear-gradient(160deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  position: relative;
+  overflow: hidden;
+  animation: rise .55s var(--ease) both;
+}
+
+.answer::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--red-bright), var(--red-deep));
+}
+
+.answer .badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.1px;
+  text-transform: uppercase;
+  color: #ff9aa3;
+  margin-bottom: 10px;
+}
+
+.answer .badge i {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--red-bright);
+  box-shadow: 0 0 0 0 var(--red-glow);
+  animation: ping 1.8s infinite;
+  font-style: normal;
+}
+
+@keyframes ping {
+  0%   { box-shadow: 0 0 0 0 var(--red-glow); }
+  70%  { box-shadow: 0 0 0 9px rgba(224,31,45,0); }
+  100% { box-shadow: 0 0 0 0 rgba(224,31,45,0); }
+}
+
+.answer h3 { margin: 0 0 6px; font-size: 19px; font-weight: 700; }
+
+.sources { margin-top: 16px; display: grid; gap: 10px; }
+
+.source {
+  background: rgba(0,0,0,.35);
+  border: 1px solid var(--line-soft);
+  border-left: 2px solid var(--red);
+  border-radius: 10px;
+  padding: 11px 14px;
+  font-size: 13.5px;
+  color: var(--muted);
+  animation: rise .5s var(--ease) both;
+  transition: transform .25s var(--ease), border-color .25s;
+}
+
+.source:hover { transform: translateX(4px); border-color: var(--red-bright); }
+.source b { color: var(--text); font-weight: 600; }
+.source .meta { display: block; margin-top: 5px; font-size: 11.5px; color: var(--muted-2); }
+
+/* ---------- stats ---------- */
+
+.stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin: 40px 0 8px;
+}
+
+.stat {
+  background: linear-gradient(155deg, var(--panel-2), rgba(10,7,8,.6));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 18px 18px 16px;
+  position: relative;
+  overflow: hidden;
+  animation: rise .6s var(--ease) both;
+  transition: transform .35s var(--ease), border-color .3s, box-shadow .35s;
+}
+
+.stat:hover {
+  transform: translateY(-5px);
+  border-color: var(--red);
+  box-shadow: 0 16px 36px rgba(0,0,0,.55);
+}
+
+.stat::after {
+  content: "";
+  position: absolute;
+  right: -28px; bottom: -34px;
+  width: 100px; height: 100px;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(224,31,45,.22), transparent 68%);
+  transition: transform .5s var(--ease);
+}
+
+.stat:hover::after { transform: scale(1.5); }
+
+.stat .n {
+  font-size: 32px;
+  font-weight: 800;
+  letter-spacing: -1px;
+  line-height: 1;
+  color: #fff;
+}
+
+.stat .l {
+  margin-top: 6px;
+  font-size: 11.5px;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* ---------- sections / panels ---------- */
+
+section.view { display: none; animation: fade .45s var(--ease); }
+section.view.active { display: block; }
+
+@keyframes fade { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+
+.section-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 42px 0 16px;
+}
+
+.section-head h2 {
+  margin: 0;
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -.3px;
+}
+
+.section-head .rule {
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(90deg, var(--red), transparent);
+}
+
+.toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.toolbar input, .toolbar select {
+  background: var(--panel);
+  border: 1px solid var(--line-soft);
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  padding: 10px 14px;
+  border-radius: 10px;
+  outline: 0;
+  transition: border-color .25s, box-shadow .3s;
+}
+
+.toolbar input { flex: 1; min-width: 200px; }
+
+.toolbar input:focus, .toolbar select:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 0 3px rgba(179,18,31,.15);
+}
+
+.toolbar select option { background: var(--black-2); }
+
+/* ---------- cards grid ---------- */
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  background: linear-gradient(158deg, var(--panel-2), rgba(10,7,8,.72));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 16px 17px;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  animation: rise .5s var(--ease) both;
+  transition: transform .35s var(--ease), border-color .3s, box-shadow .35s;
+}
+
+.card::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--red-bright), var(--red-deep));
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .45s var(--ease);
+}
+
+.card:hover {
+  transform: translateY(-6px);
+  border-color: var(--red);
+  box-shadow: 0 18px 40px rgba(0,0,0,.6);
+}
+
+.card:hover::before { transform: scaleX(1); }
+
+.card .title {
+  font-weight: 700;
+  font-size: 16px;
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card .row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.card .row .k { color: var(--muted-2); min-width: 56px; font-size: 11.5px; text-transform: uppercase; letter-spacing: .7px; }
+
+.pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: rgba(224,31,45,.16);
+  border: 1px solid rgba(224,31,45,.32);
+  color: #ff9aa3;
+}
+
+/* ---------- event card ---------- */
+
+.event {
+  background: linear-gradient(158deg, var(--panel-2), rgba(10,7,8,.72));
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  animation: rise .5s var(--ease) both;
+  transition: transform .35s var(--ease), border-color .3s, box-shadow .35s;
+  position: relative;
+  overflow: hidden;
+}
+
+.event:hover {
+  transform: translateY(-5px);
+  border-color: var(--red);
+  box-shadow: 0 18px 40px rgba(0,0,0,.6);
+}
+
+.event .when {
+  font-size: 11.5px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: #ff9aa3;
+  margin-bottom: 9px;
+}
+
+.match {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 10px;
+  margin: 4px 0 12px;
+}
+
+.match .side { font-weight: 700; font-size: 15px; }
+.match .side.away { text-align: right; }
+
+.match .vs {
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  color: #fff;
+  background: linear-gradient(135deg, var(--red), var(--red-deep));
+  padding: 4px 10px;
+  border-radius: 999px;
+  box-shadow: 0 0 16px var(--red-glow);
+}
+
+.event .foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  font-size: 12.5px;
+  color: var(--muted);
+  border-top: 1px dashed var(--line-soft);
+  padding-top: 10px;
+}
+
+/* ---------- drawer ---------- */
+
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(4,2,3,.72);
+  backdrop-filter: blur(4px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .35s var(--ease);
+  z-index: 60;
+}
+
+.scrim.open { opacity: 1; pointer-events: auto; }
+
+.drawer {
+  position: fixed;
+  top: 0; right: 0;
+  height: 100%;
+  width: min(430px, 92vw);
+  background: linear-gradient(180deg, var(--panel-2), var(--black));
+  border-left: 1px solid var(--line);
+  z-index: 70;
+  transform: translateX(102%);
+  transition: transform .45s var(--ease);
+  display: flex;
+  flex-direction: column;
+}
+
+.drawer.open { transform: none; box-shadow: -30px 0 70px rgba(0,0,0,.7); }
+
+.drawer .head {
+  padding: 22px 24px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.drawer .head h3 { margin: 0 0 6px; font-size: 22px; font-weight: 800; letter-spacing: -.4px; }
+
+.drawer .body { padding: 18px 24px 40px; overflow-y: auto; }
+
+.drawer .close {
+  position: absolute;
+  top: 18px; right: 18px;
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  transition: all .25s var(--ease);
+}
+
+.drawer .close:hover { color: #fff; border-color: var(--red); transform: rotate(90deg); }
+
+.kv {
+  display: grid;
+  grid-template-columns: 92px 1fr;
+  gap: 6px 12px;
+  font-size: 13.5px;
+  margin-bottom: 18px;
+}
+
+.kv dt { color: var(--muted-2); text-transform: uppercase; font-size: 11px; letter-spacing: .8px; padding-top: 2px; }
+.kv dd { margin: 0; color: var(--text); }
+
+.mini-title {
+  font-size: 11.5px;
+  letter-spacing: 1.3px;
+  text-transform: uppercase;
+  color: #ff9aa3;
+  margin: 20px 0 10px;
+}
+
+.player-list { display: flex; flex-wrap: wrap; gap: 7px; }
+
+.player {
+  font-size: 12.5px;
+  padding: 5px 11px;
+  border-radius: 999px;
+  background: rgba(179,18,31,.12);
+  border: 1px solid var(--line-soft);
+  color: var(--muted);
+  animation: rise .4s var(--ease) both;
+  transition: all .22s var(--ease);
+}
+
+.player:hover { color: #fff; border-color: var(--red); transform: translateY(-2px); }
+
+/* ---------- misc ---------- */
+
+.empty {
+  padding: 46px 20px;
+  text-align: center;
+  color: var(--muted-2);
+  border: 1px dashed var(--line-soft);
+  border-radius: var(--radius);
+}
+
+.skeleton {
+  height: 116px;
+  border-radius: var(--radius);
+  background: linear-gradient(100deg, var(--panel) 30%, var(--panel-2) 50%, var(--panel) 70%);
+  background-size: 220% 100%;
+  animation: shimmer 1.3s infinite linear;
+}
+
+@keyframes shimmer { to { background-position: -220% 0; } }
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: none; }
+}
+
+.spinner {
+  width: 15px; height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.35);
+  border-top-color: #fff;
+  display: inline-block;
+  vertical-align: -2px;
+  animation: spin .7s linear infinite;
+}
+
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.banner {
+  display: none;
+  margin: 18px 0 0;
+  padding: 13px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--red);
+  background: linear-gradient(120deg, rgba(179,18,31,.20), rgba(109,10,19,.10));
+  font-size: 13.5px;
+  color: var(--text);
+  animation: rise .5s var(--ease) both;
+}
+
+.banner.show { display: block; }
+.banner span { display: block; margin-top: 4px; color: var(--muted); }
+
+.toast {
+  position: fixed;
+  left: 50%; bottom: 26px;
+  transform: translate(-50%, 90px);
+  background: var(--panel-2);
+  border: 1px solid var(--red);
+  color: var(--text);
+  padding: 11px 20px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  z-index: 90;
+  transition: transform .4s var(--ease);
+  box-shadow: 0 14px 40px rgba(0,0,0,.6);
+}
+
+.toast.show { transform: translate(-50%, 0); }
+
+footer.bottom {
+  margin-top: 60px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-soft);
+  font-size: 12.5px;
+  color: var(--muted-2);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: space-between;
+}
+
+@media (max-width: 620px) {
+  nav.tabs { width: 100%; margin: 0; order: 3; justify-content: center; }
+  .top-inner { flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+</style>
+</head>
+<body>
+
+<div class="backdrop"></div>
+
+<div class="pitch" aria-hidden="true">
+  <svg viewBox="0 0 1200 800" preserveAspectRatio="none">
+    <line class="line" x1="600" y1="0" x2="600" y2="800" />
+    <circle class="line" cx="600" cy="400" r="118" />
+    <rect class="line" x="0"    y="228" width="168" height="344" />
+    <rect class="line" x="1032" y="228" width="168" height="344" />
+    <circle class="line" cx="600" cy="400" r="5" />
+  </svg>
+</div>
+
+<div class="ball" aria-hidden="true">
+  <svg viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="46" fill="none" stroke="rgba(255,120,130,.75)" stroke-width="5"/>
+    <path d="M50 18 L74 36 L65 64 L35 64 L26 36 Z" fill="rgba(255,120,130,.55)"/>
+    <path d="M50 18 V4 M74 36 L88 30 M65 64 L74 88 M35 64 L26 88 M26 36 L12 30"
+          stroke="rgba(255,120,130,.6)" stroke-width="5" fill="none"/>
+  </svg>
+</div>
+
+<div class="pulse-ring"></div>
+<div class="pulse-ring two"></div>
+
+<header class="top">
+  <div class="top-inner">
+    <div class="brand"><span class="orb">⚽</span>Sports<span class="light">Info</span></div>
+    <nav class="tabs">
+      <button data-view="home"   class="active">Ask</button>
+      <button data-view="teams">Clubs</button>
+      <button data-view="events">Fixtures</button>
+      <button data-view="meta">Metadata</button>
+    </nav>
+  </div>
+</header>
+
+<div class="shell">
+
+  <div class="banner" id="banner">
+    <b>⚠️ Backend not connected.</b>
+    <span id="bannerText"></span>
+  </div>
+
+  <!-- ================= HOME / ASK ================= -->
+  <section class="view active" id="view-home">
+
+    <div class="hero">
+      <h1>Everything about football</h1>
+      <p>Semantic search across clubs, leagues, stadiums and fixtures — ask in plain English, the vector index does the rest.</p>
+    </div>
+
+    <div class="ask">
+      <div class="ask-shell">
+        <input id="q" type="text" placeholder="e.g. Which stadium do Everton play at?" autocomplete="off" />
+        <button class="go" id="askBtn">Search</button>
+      </div>
+      <div class="chips" id="chips"></div>
+    </div>
+
+    <div id="answerWrap"></div>
+
+    <div class="stats" id="stats"></div>
+  </section>
+
+  <!-- ================= TEAMS ================= -->
+  <section class="view" id="view-teams">
+    <div class="section-head"><h2>Clubs</h2><div class="rule"></div><span class="pill" id="teamsCount">—</span></div>
+    <div class="toolbar">
+      <input id="teamSearch" type="text" placeholder="Search club, league or stadium…" />
+      <select id="teamLeague"><option value="">All leagues</option></select>
+    </div>
+    <div class="grid" id="teamsGrid"></div>
+  </section>
+
+  <!-- ================= EVENTS ================= -->
+  <section class="view" id="view-events">
+    <div class="section-head"><h2>Upcoming fixtures</h2><div class="rule"></div><span class="pill" id="eventsCount">—</span></div>
+    <div class="toolbar">
+      <input id="eventSearch" type="text" placeholder="Search fixture, team or venue…" />
+      <select id="eventLeague"><option value="">All leagues</option></select>
+    </div>
+    <div class="grid" id="eventsGrid" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))"></div>
+  </section>
+
+  <!-- ================= METADATA ================= -->
+  <section class="view" id="view-meta">
+    <div class="section-head"><h2>Leagues</h2><div class="rule"></div></div>
+    <div class="grid" id="leaguesGrid"></div>
+
+    <div class="section-head"><h2>Venues</h2><div class="rule"></div></div>
+    <div class="grid" id="venuesGrid"></div>
+  </section>
+
+  <footer class="bottom">
+    <span>Sports Info · Football · SQLite + FAISS + all-MiniLM-L6-v2</span>
+    <span id="engineNote">—</span>
+  </footer>
+</div>
+
+<!-- ================= DRAWER ================= -->
+<div class="scrim" id="scrim"></div>
+<aside class="drawer" id="drawer">
+  <button class="close" id="drawerClose">✕</button>
+  <div class="head">
+    <h3 id="drawerTitle">—</h3>
+    <div id="drawerSub" class="pill">—</div>
+  </div>
+  <div class="body" id="drawerBody"></div>
+</aside>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ============================================================
+   Sports Info frontend
+   ============================================================ */
+
+/*
+ * API base.
+ * The page is normally served BY the FastAPI app (uvicorn src.api:app), so a
+ * same-origin "" works. If it was opened straight off disk (file://) or from a
+ * plain static server such as `python -m http.server`, "/api/..." would hit
+ * that server instead and come back 404 - so fall back to the uvicorn default.
+ */
+const SAME_ORIGIN_API =
+  location.protocol.startsWith("http") && location.port !== "8080" && location.port !== "5500";
+
+let API = SAME_ORIGIN_API ? "" : "http://127.0.0.1:8000";
+
+const $  = (sel) => document.querySelector(sel);
+
+const SUGGESTIONS = [
+  "Which stadium do Everton play at?",
+  "Tell me about Manchester United",
+  "Which clubs are in the English Premier League?",
+  "Who plays at the King Power Stadium?",
+];
+
+let LEAGUES = [];
+
+/* ---------- helpers ---------- */
+
+async function api(path, options) {
+  let res;
+
+  try {
+    res = await fetch(API + path, options);
+  } catch (err) {
+    throw new Error(
+      "Cannot reach the API. Start it with:  uvicorn src.api:app --reload  (from the project root), then open http://127.0.0.1:8000"
+    );
+  }
+
+  if (res.status === 404 && !API) {
+    // Served by something that is not the API - retry against uvicorn once.
+    API = "http://127.0.0.1:8000";
+    return api(path, options);
+  }
+
+  if (!res.ok) {
+    const detail = await res.json().catch(() => ({}));
+    throw new Error(detail.detail || `Request failed (${res.status})`);
+  }
+
+  return res.json();
+}
+
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function stagger(container) {
+  [...container.children].forEach((el, i) => {
+    el.style.animationDelay = Math.min(i * 45, 500) + "ms";
+  });
+}
+
+function skeletons(container, n = 6) {
+  container.innerHTML = Array.from({ length: n }, () => `<div class="skeleton"></div>`).join("");
+}
+
+let toastTimer;
+function toast(message) {
+  const el = $("#toast");
+  el.textContent = message;
+  el.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove("show"), 3800);
+}
+
+function debounce(fn, wait = 260) {
+  let t;
+  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+}
+
+function countUp(el, target) {
+  const duration = 900;
+  const start = performance.now();
+  function frame(now) {
+    const p = Math.min((now - start) / duration, 1);
+    const eased = 1 - Math.pow(1 - p, 3);
+    el.textContent = Math.round(target * eased).toLocaleString();
+    if (p < 1) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+function formatDate(value) {
+  if (!value) return "Date TBC";
+  const d = new Date(value);
+  if (isNaN(d)) return esc(value);
+  return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" });
+}
+
+/* ---------- tabs ---------- */
+
+document.querySelectorAll("nav.tabs button").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll("nav.tabs button").forEach((b) => b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll("section.view").forEach((v) => v.classList.remove("active"));
+    $("#view-" + btn.dataset.view).classList.add("active");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  });
+});
+
+/* ---------- stats ---------- */
+
+async function loadStats() {
+  const grid = $("#stats");
+  try {
+    const data = await api("/api/stats");
+    const order = [
+      ["teams", "Clubs"], ["players", "Players"], ["events", "Fixtures"],
+      ["leagues", "Leagues"], ["venues", "Venues"],
+    ];
+    grid.innerHTML = order.map(([key, label]) =>
+      `<div class="stat"><div class="n" data-n="${data[key]}">0</div><div class="l">${label}</div></div>`
+    ).join("");
+    stagger(grid);
+    grid.querySelectorAll(".n").forEach((el) => countUp(el, +el.dataset.n));
+  } catch (err) {
+    grid.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+/* ---------- ask ---------- */
+
+function renderAnswer(data) {
+  const wrap = $("#answerWrap");
+
+  const sources = (data.results || []).map((item) => {
+    const m = item.metadata || {};
+    const bits = [];
+    if (m.league) bits.push(`League: ${esc(m.league)}`);
+    if (m.venue)  bits.push(`Venue: ${esc(m.venue)}`);
+    if (item.distance !== null && item.distance !== undefined) bits.push(`distance ${item.distance}`);
+    return `<div class="source">
+              <b>${esc(m.team || "Result")}</b> — ${esc(item.text)}
+              <span class="meta">${bits.join(" · ")}</span>
+            </div>`;
+  }).join("");
+
+  wrap.innerHTML = `
+    <div class="answer">
+      <div class="badge"><i></i>${data.mode === "vector" ? "Vector search" : "Keyword fallback"} · ${(data.results || []).length} match(es)</div>
+      <h3>${esc(data.answer)}</h3>
+      ${data.note ? `<div class="source" style="margin-top:12px">${esc(data.note)}</div>` : ""}
+      ${sources ? `<div class="sources">${sources}</div>` : ""}
+    </div>`;
+
+  stagger(wrap.querySelector(".sources") || wrap);
+}
+
+async function ask() {
+  const question = $("#q").value.trim();
+  if (!question) { toast("Type a question first"); return; }
+
+  const btn = $("#askBtn");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span>`;
+
+  $("#answerWrap").innerHTML = `<div class="answer"><div class="badge"><i></i>Searching the index…</div><div class="skeleton" style="height:56px"></div></div>`;
+
+  try {
+    const data = await api("/api/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, top_k: 5 }),
+    });
+    renderAnswer(data);
+  } catch (err) {
+    $("#answerWrap").innerHTML = `<div class="answer"><h3>Search failed</h3><div class="source">${esc(err.message)}</div></div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Search";
+  }
+}
+
+$("#askBtn").addEventListener("click", ask);
+$("#q").addEventListener("keydown", (e) => { if (e.key === "Enter") ask(); });
+
+$("#chips").innerHTML = SUGGESTIONS.map((s) => `<span class="chip">${esc(s)}</span>`).join("");
+$("#chips").addEventListener("click", (e) => {
+  const chip = e.target.closest(".chip");
+  if (!chip) return;
+  $("#q").value = chip.textContent;
+  ask();
+});
+
+/* ---------- teams ---------- */
+
+async function loadTeams() {
+  const grid = $("#teamsGrid");
+  skeletons(grid, 8);
+
+  const params = new URLSearchParams();
+  const search = $("#teamSearch").value.trim();
+  const league = $("#teamLeague").value;
+  if (search) params.set("search", search);
+  if (league) params.set("league", league);
+
+  try {
+    const data = await api("/api/teams?" + params);
+    $("#teamsCount").textContent = `${data.length} club(s)`;
+
+    if (!data.length) { grid.innerHTML = `<div class="empty">No teams matched.</div>`; return; }
+
+    grid.innerHTML = data.map((t) => `
+      <div class="card" data-team="${t.id}">
+        <div class="title">⚽ ${esc(t.name)}</div>
+        <div class="row"><span class="k">League</span> ${esc(t.league || "—")}</div>
+        <div class="row"><span class="k">Stadium</span> ${esc(t.venue || "—")}</div>
+        <div class="row"><span class="k">Squad</span> 👟 ${t.players} player(s)</div>
+      </div>`).join("");
+
+    stagger(grid);
+  } catch (err) {
+    grid.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+$("#teamsGrid").addEventListener("click", (e) => {
+  const card = e.target.closest(".card");
+  if (card) openTeam(card.dataset.team);
+});
+
+$("#teamSearch").addEventListener("input", debounce(loadTeams));
+$("#teamLeague").addEventListener("change", loadTeams);
+
+/* ---------- events ---------- */
+
+async function loadEvents() {
+  const grid = $("#eventsGrid");
+  skeletons(grid, 4);
+
+  const params = new URLSearchParams();
+  const search = $("#eventSearch").value.trim();
+  const league = $("#eventLeague").value;
+  if (search) params.set("search", search);
+  if (league) params.set("league", league);
+
+  try {
+    const data = await api("/api/events?" + params);
+    $("#eventsCount").textContent = `${data.length} fixture(s)`;
+
+    if (!data.length) { grid.innerHTML = `<div class="empty">No fixtures found.</div>`; return; }
+
+    grid.innerHTML = data.map((ev) => `
+      <div class="event">
+        <div class="when">${formatDate(ev.date)}${ev.time ? " · " + esc(ev.time.slice(0, 5)) : ""}</div>
+        <div class="match">
+          <div class="side">${esc(ev.home_team || "?")}</div>
+          <div class="vs">VS</div>
+          <div class="side away">${esc(ev.away_team || "?")}</div>
+        </div>
+        <div class="foot">
+          <span>🏆 ${esc(ev.league || "—")}</span>
+          <span>🏟️ ${esc(ev.venue || "—")}</span>
+        </div>
+      </div>`).join("");
+
+    stagger(grid);
+  } catch (err) {
+    grid.innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+$("#eventSearch").addEventListener("input", debounce(loadEvents));
+$("#eventLeague").addEventListener("change", loadEvents);
+
+/* ---------- metadata ---------- */
+
+async function loadMeta() {
+  try {
+    const [leagues, venues] = await Promise.all([api("/api/leagues"), api("/api/venues")]);
+
+    LEAGUES = leagues;
+
+    const options = `<option value="">All leagues</option>` +
+      leagues.map((l) => `<option value="${l.id}">${esc(l.name)}</option>`).join("");
+    $("#teamLeague").innerHTML = options;
+    $("#eventLeague").innerHTML = options;
+
+    const lg = $("#leaguesGrid");
+    lg.innerHTML = leagues.map((l) => `
+      <div class="card">
+        <div class="title">🏆 ${esc(l.name)}</div>
+        <div class="row"><span class="k">Teams</span> ${l.teams}</div>
+        <div class="row"><span class="k">ID</span> ${l.id}</div>
+      </div>`).join("");
+    stagger(lg);
+
+    const vg = $("#venuesGrid");
+    vg.innerHTML = venues.map((v) => `
+      <div class="card">
+        <div class="title">🏟️ ${esc(v.name)}</div>
+        <div class="row"><span class="k">Teams</span> ${v.teams}</div>
+        <div class="row"><span class="k">ID</span> ${v.id}</div>
+      </div>`).join("");
+    stagger(vg);
+  } catch (err) {
+    $("#leaguesGrid").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+/* ---------- drawer ---------- */
+
+function closeDrawer() {
+  $("#drawer").classList.remove("open");
+  $("#scrim").classList.remove("open");
+}
+
+$("#drawerClose").addEventListener("click", closeDrawer);
+$("#scrim").addEventListener("click", closeDrawer);
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+
+async function openTeam(teamId) {
+  $("#drawer").classList.add("open");
+  $("#scrim").classList.add("open");
+  $("#drawerTitle").textContent = "Loading…";
+  $("#drawerSub").textContent = "—";
+  $("#drawerBody").innerHTML = `<div class="skeleton" style="height:180px"></div>`;
+
+  try {
+    const t = await api(`/api/teams/${teamId}`);
+
+    $("#drawerTitle").textContent = t.name;
+    $("#drawerSub").textContent = t.league || "Unknown league";
+
+    const fixtures = (t.events || []).map((ev) => `
+      <div class="source">
+        <b>${esc(ev.name || `${ev.home_team} vs ${ev.away_team}`)}</b>
+        <span class="meta">${formatDate(ev.date)} · ${esc(ev.venue || "—")}</span>
+      </div>`).join("");
+
+    const players = (t.players || []).map((p) => `<span class="player">${esc(p.name)}</span>`).join("");
+
+    $("#drawerBody").innerHTML = `
+      <dl class="kv">
+        <dt>Team ID</dt><dd>${t.id}</dd>
+        <dt>League</dt><dd>${esc(t.league || "—")}</dd>
+        <dt>League ID</dt><dd>${t.league_id ?? "—"}</dd>
+        <dt>Stadium</dt><dd>${esc(t.venue || "—")}</dd>
+        <dt>Venue ID</dt><dd>${t.venue_id ?? "—"}</dd>
+        <dt>Squad</dt><dd>${(t.players || []).length} player(s)</dd>
+      </dl>
+
+      <div class="mini-title">Fixtures</div>
+      ${fixtures || `<div class="empty" style="padding:20px">No fixtures stored.</div>`}
+
+      <div class="mini-title">Squad</div>
+      <div class="player-list">${players || `<span class="player">No players stored</span>`}</div>`;
+
+    $("#drawerBody").querySelectorAll(".player, .source").forEach((el, i) => {
+      el.style.animationDelay = Math.min(i * 22, 600) + "ms";
+    });
+  } catch (err) {
+    $("#drawerBody").innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+  }
+}
+
+/* ---------- health ---------- */
+
+async function loadHealth() {
+  try {
+    const h = await api("/api/health");
+
+    $("#engineNote").textContent = h.vector_index
+      ? "Vector index ready"
+      : "Vector index missing — keyword fallback active";
+
+    $("#banner").classList.remove("show");
+  } catch (err) {
+    $("#engineNote").textContent = "API unreachable";
+    $("#bannerText").textContent = err.message;
+    $("#banner").classList.add("show");
+  }
+}
+
+/* ---------- boot ---------- */
+
+(async function boot() {
+  await loadMeta();
+  loadStats();
+  loadTeams();
+  loadEvents();
+  loadHealth();
+})();
+</script>
+</body>
+</html>

@@ -202,11 +202,13 @@ for event in data:
     # Insert Event
     conn.execute(
         """INSERT OR IGNORE INTO events
-        (idEvent, name, idLeague, idHomeTeam, idAwayTeam, idVenue)
-        VALUES (?, ?, ?, ?, ?, ?)""",
+        (idEvent, name, dateEvent, strTime, idLeague, idHomeTeam, idAwayTeam, idVenue)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
         (
             event["idEvent"],
             event["strEvent"],
+            event.get("dateEvent"),
+            event.get("strTime"),
             event["idLeague"],
             event["idHomeTeam"],
             event["idAwayTeam"],
