@@ -1,0 +1,22 @@
+[
+    {
+        "text": "Team: Arsenal. League: English Premier League. Stadium: Emirates Stadium.",
+        "metadata": {
+            "team": "Arsenal",
+            "league": "English Premier League",
+            "venue": "Emirates Stadium",
+            "source": "sports_database",
+            "chunk_id": 0
+        }
+    },
+    {
+        "text": "Team: Chelsea. League: English Premier League. Stadium: Stamford Bridge.",
+        "metadata": {
+            "team": "Chelsea",
+            "league": "English Premier League",
+            "venue": "Stamford Bridge",
+            "source": "sports_database",
+            "chunk_id": 0
+        }
+    }
+]
